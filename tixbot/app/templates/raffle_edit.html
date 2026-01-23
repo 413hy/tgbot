@@ -1,0 +1,138 @@
+{% extends "base.html" %}
+
+{% block top_right %}
+<div class="d-flex gap-2 flex-wrap align-items-center">
+  <a class="btn btn-outline-secondary btn-sm" href="/admin/raffle/{{ r.code }}/prizes?token={{ token }}">配置奖品</a>
+  <a class="btn btn-outline-secondary btn-sm" href="/admin/raffle/{{ r.code }}/participants?token={{ token }}">参与者</a>
+</div>
+{% endblock %}
+
+{% block content %}
+{% set is_locked = (r.status in ['published','drawn']) %}
+
+{% if r.status == 'published' %}
+<div class="alert alert-info">📌 该抽奖已发布。为避免争议，发布后将锁定为只读，不再允许修改或重复发布。</div>
+{% endif %}
+
+{% if r.status == 'drawn' %}
+<div class="alert alert-warning">✅ 该抽奖已结束（已开奖）。页面已锁定为只读。</div>
+{% endif %}
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+    <div class="row g-3">
+      <div class="col-md-4">
+        <div class="fw-semibold">编号</div>
+        <div><code>{{ r.code }}</code></div>
+      </div>
+      <div class="col-md-4">
+        <div class="fw-semibold">状态</div>
+        <div><span id="status">{{ r.status }}</span></div>
+      </div>
+      <div class="col-md-4">
+        <div class="fw-semibold">发布群</div>
+        <div><code>{{ r.target_chat_id }}</code></div>
+      </div>
+    </div>
+    <div class="muted mt-2">
+      参与方式目前仅支持 <b>消耗积分参与</b>（积分从 tgbot 数据库读取并同步到本库）。
+    </div>
+  </div>
+</div>
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+    <form method="post" action="/admin/raffle/{{ r.code }}?token={{ token }}">
+      <div class="mb-3">
+        <label class="form-label fw-semibold">抽奖标题</label>
+        <input class="form-control" name="title" value="{{ r.title }}" placeholder="例如：新年红包抽奖" {% if is_locked %}disabled{% endif %} />
+      </div>
+
+      <div class="mb-3">
+        <label class="form-label fw-semibold">抽奖说明</label>
+        <textarea class="form-control" name="description" rows="5" placeholder="抽奖规则、奖品说明等" {% if is_locked %}disabled{% endif %}>{{ r.description or '' }}</textarea>
+      </div>
+
+      <div class="row g-3">
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">参与消耗积分</label>
+          <input class="form-control" name="cost_points" type="number" min="0" value="{{ r.cost_points }}" {% if is_locked %}disabled{% endif %} />
+          <div class="muted mt-1">群内用户点击参与时会先提示“将消耗 X 积分 / 当前余额 Y”。</div>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">开奖方式</label>
+          <select class="form-select" name="draw_mode" {% if is_locked %}disabled{% endif %}>
+            <option value="time" {% if r.draw_mode=='time' %}selected{% endif %}>定时开奖</option>
+            <option value="threshold" {% if r.draw_mode=='threshold' %}selected{% endif %}>人数达标开奖</option>
+          </select>
+        </div>
+        <div class="col-md-4">
+          <label class="form-label fw-semibold">人数达标 >=</label>
+          <input class="form-control" name="min_participants" type="number" min="0" value="{{ r.min_participants }}" {% if is_locked %}disabled{% endif %} />
+        </div>
+      </div>
+
+      <div class="row g-3 mt-1">
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">开奖时间</label>
+          <input class="form-control" name="draw_at" type="datetime-local" value="{{ r.draw_at_local }}" {% if is_locked %}disabled{% endif %} />
+          <div class="muted mt-1">浏览器自带日历选择器，无需手写时间。</div>
+        </div>
+        <div class="col-md-6">
+          <label class="form-label fw-semibold">说明</label>
+          <div class="muted" style="padding-top:10px">
+            定时开奖时使用该时间；人数达标开奖时忽略。
+          </div>
+        </div>
+      </div>
+
+      <div class="d-flex gap-2 flex-wrap mt-3">
+        <button class="btn btn-primary" type="submit" {% if is_locked %}disabled{% endif %}>保存</button>
+        <a class="btn btn-outline-secondary" href="/admin/raffle/{{ r.code }}/prizes?token={{ token }}">去配置奖品</a>
+      </div>
+    </form>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+    <div class="d-flex gap-2 flex-wrap align-items-center">
+      <form method="post" action="/admin/raffle/{{ r.code }}/publish?token={{ token }}" class="m-0">
+        <button class="btn btn-success" type="submit" {% if r.status != 'draft' %}disabled{% endif %}>发布到群并置顶</button>
+      </form>
+      <a class="btn btn-outline-secondary" href="/admin/raffle/{{ r.code }}/participants?token={{ token }}">查看参与者</a>
+    </div>
+    {% if publish_error %}
+      <div class="muted mt-2">提示：{{ publish_error }}</div>
+    {% endif %}
+    <div class="muted mt-2" id="draw_info"></div>
+  </div>
+</div>
+
+<script>
+  async function refreshStatus(){
+    try{
+      const res = await fetch(`/admin/raffle/{{ r.code }}/status?token={{ token }}`);
+      if(!res.ok) return;
+      const data = await res.json();
+      const st = document.getElementById('status');
+      if(st) st.textContent = data.status;
+      const di = document.getElementById('draw_info');
+      if(di){
+        if(data.status === 'drawn'){
+          let t = `✅ 已结束`;
+          if(data.drawn_at) t += `（开奖时间：${data.drawn_at} 上海时间）`;
+          if(data.draw_block_hash) t += `<br>区块哈希：<code>${data.draw_block_hash}</code>`;
+          di.innerHTML = t;
+        } else {
+          di.innerHTML = '';
+        }
+      }
+    }catch(e){
+      // ignore
+    }
+  }
+  setInterval(refreshStatus, 5000);
+  refreshStatus();
+</script>
+{% endblock %}

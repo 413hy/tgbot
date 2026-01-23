@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block top_right %}
+<div class="d-flex gap-2 flex-wrap align-items-center">
+  <span class="muted">参与人数：<b id="total">{{ total }}</b></span>
+  <a class="btn btn-outline-secondary btn-sm" href="/admin/raffle/{{ code }}?token={{ token }}">返回抽奖</a>
+  <a class="btn btn-outline-secondary btn-sm" href="/admin/raffle/{{ code }}/prizes?token={{ token }}">配置奖品</a>
+</div>
+{% endblock %}
+
+{% block content %}
+<div class="card shadow-sm">
+  <div class="card-body">
+  <h5 class="mb-3">参与者列表</h5>
+  <div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr>
+        <th>TGID</th>
+        <th>用户名</th>
+        <th>状态</th>
+        <th>编号</th>
+        <th>参与时间</th>
+        <th>score / 结果</th>
+      </tr>
+    </thead>
+    <tbody>
+    {% for u in users %}
+      <tr>
+        <td>{{ u.tg_id }}</td>
+        <td>{{ u.username or '' }}</td>
+        <td>{{ u.status }}</td>
+        <td>{{ "%08d"|format(u.participant_no) }}</td>
+        <td>{{ u.joined_at.strftime('%Y-%m-%d %H:%M:%S') if u.joined_at else '' }}</td>
+        <td>
+          {{ u.score or '' }}
+          {% if u.status == 'won' %}
+            <div class="muted">✅ {{ u.win_prize or '中奖' }}{% if u.win_rank %}（#{{ u.win_rank }}）{% endif %}</div>
+          {% endif %}
+        </td>
+      </tr>
+    {% endfor %}
+    {% if users|length == 0 %}
+      <tr><td colspan="6" class="muted">暂无参与者</td></tr>
+    {% endif %}
+    </tbody>
+  </table>
+  </div>
+  </div>
+</div>
+
+<script>
+  async function refreshParticipants(){
+    try{
+      const res = await fetch(`/admin/raffle/{{ code }}/participants/data?token={{ token }}`);
+      if(!res.ok) return;
+      const data = await res.json();
+      const totalEl = document.getElementById('total');
+      if(totalEl) totalEl.textContent = data.total;
+
+      const tbody = document.querySelector('table tbody');
+      if(!tbody) return;
+      const rows = data.users || [];
+      let html = '';
+      if(rows.length === 0){
+        html = `<tr><td colspan="6" class="muted">暂无参与者</td></tr>`;
+      } else {
+        for(const u of rows){
+          const score = (u.score === null || u.score === undefined) ? '' : u.score;
+          let result = '';
+          if(u.status === 'won'){
+            const prize = u.win_prize || '中奖';
+            const rank = (u.win_rank ? `（#${u.win_rank}）` : '');
+            result = `<div class="muted">✅ ${prize}${rank}</div>`;
+          }
+          html += `<tr>`
+            + `<td>${u.tg_id}</td>`
+            + `<td>${u.username || ''}</td>`
+            + `<td>${u.status}</td>`
+            + `<td>${u.participant_no}</td>`
+            + `<td>${u.joined_at || ''}</td>`
+            + `<td>${score}${result}</td>`
+            + `</tr>`;
+        }
+      }
+      tbody.innerHTML = html;
+    }catch(e){
+      // ignore
+    }
+  }
+  setInterval(refreshParticipants, 3000);
+</script>
+{% endblock %}

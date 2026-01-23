@@ -1,0 +1,144 @@
+{% extends "base.html" %}
+
+{% block top_right %}
+<div class="d-flex gap-2 flex-wrap align-items-center">
+  <a class="btn btn-outline-secondary btn-sm" href="/admin/raffle/{{ code }}?token={{ token }}">返回抽奖</a>
+  <a class="btn btn-outline-secondary btn-sm" href="/admin/raffle/{{ code }}/participants?token={{ token }}">参与者</a>
+</div>
+{% endblock %}
+
+{% block content %}
+{% set is_locked = (raffle_status in ['published','drawn']) %}
+
+{% if raffle_status == 'published' %}
+<div class="alert alert-info">📌 该抽奖已发布。为避免争议，奖品配置已锁定为只读。</div>
+{% endif %}
+{% if raffle_status == 'drawn' %}
+<div class="alert alert-warning">✅ 该抽奖已结束（已开奖）。奖品配置已锁定为只读。</div>
+{% endif %}
+
+<div class="card shadow-sm mb-3">
+  <div class="card-body">
+  <h5 class="mb-3">奖品列表</h5>
+  <div class="table-responsive">
+  <table class="table table-sm align-middle">
+    <thead>
+      <tr><th>类型</th><th>名称</th><th>数量</th><th>操作</th></tr>
+    </thead>
+    <tbody>
+      {% for p in prizes %}
+        <tr>
+          <td>
+            {% if p.prize_type == 'points' %}积分
+            {% elif p.prize_type == 'vps' %}VPS
+            {% elif p.prize_type == 'nat' %}NAT机
+            {% elif p.prize_type == 'discount_code' %}优惠码
+            {% else %}自定义
+            {% endif %}
+          </td>
+          <td>
+            {% if p.prize_type == 'points' %}
+              {{ p.points_amount }} 积分
+            {% elif p.prize_type == 'custom' %}
+              {{ p.custom_label or p.prize_name }}
+            {% else %}
+              {{ p.prize_name }}
+            {% endif %}
+          </td>
+          <td>{{ p.quantity }}</td>
+          <td>
+            <form method="post" action="/admin/raffle/{{ code }}/prizes/delete?token={{ token }}" class="m-0">
+              <input type="hidden" name="prize_id" value="{{ p.id }}" />
+              <button class="btn btn-outline-danger btn-sm" type="submit" {% if is_locked %}disabled{% endif %}>删除</button>
+            </form>
+          </td>
+        </tr>
+      {% endfor %}
+      {% if prizes|length == 0 %}
+        <tr><td colspan="4" class="muted">暂无奖品</td></tr>
+      {% endif %}
+    </tbody>
+  </table>
+  </div>
+  </div>
+</div>
+
+<div class="card shadow-sm">
+  <div class="card-body">
+  <h5 class="mb-3">新增奖品</h5>
+  <form method="post" action="/admin/raffle/{{ code }}/prizes/add?token={{ token }}" id="prizeForm">
+    <div class="row g-3">
+      <div class="col-md-4">
+        <label class="form-label fw-semibold">奖品类型</label>
+        <select class="form-select" name="prize_type" id="prize_type" {% if is_locked %}disabled{% endif %}>
+          <option value="points">积分</option>
+          <option value="vps">VPS</option>
+          <option value="nat">NAT机</option>
+          <option value="discount_code">优惠码</option>
+          <option value="custom" selected>自定义</option>
+        </select>
+        <div class="form-text">除“积分”外，其它类型仅记录，需你手动发放。</div>
+      </div>
+
+      <div class="col-md-8" id="row_name">
+        <label class="form-label fw-semibold" id="label_name">奖品说明</label>
+        <input class="form-control" name="prize_name" id="prize_name" placeholder="例如：VPS月付 / NAT机月付 / 优惠码 XXXXX" {% if is_locked %}disabled{% endif %} />
+      </div>
+
+      <div class="col-md-8 d-none" id="row_custom">
+        <label class="form-label fw-semibold">自定义名称</label>
+        <input class="form-control" name="custom_label" id="custom_label" placeholder="例如：流量包 1TB/月" {% if is_locked %}disabled{% endif %} />
+      </div>
+
+      <div class="col-md-8 d-none" id="row_points">
+        <label class="form-label fw-semibold">积分数量（每份）</label>
+        <input class="form-control" name="points_amount" id="points_amount" type="number" min="1" step="1" value="100" {% if is_locked %}disabled{% endif %} />
+      </div>
+
+      <div class="col-md-4">
+        <label class="form-label fw-semibold">数量</label>
+        <input class="form-control" name="quantity" type="number" min="1" value="1" {% if is_locked %}disabled{% endif %} />
+      </div>
+    </div>
+
+    <div class="d-flex gap-2 flex-wrap mt-3">
+      <button class="btn btn-primary" type="submit" {% if is_locked %}disabled{% endif %}>添加</button>
+    </div>
+  </form>
+  </div>
+</div>
+
+<script>
+(function(){
+  const sel = document.getElementById('prize_type');
+  const rowName = document.getElementById('row_name');
+  const rowCustom = document.getElementById('row_custom');
+  const rowPoints = document.getElementById('row_points');
+  const labelName = document.getElementById('label_name');
+  const inputName = document.getElementById('prize_name');
+
+  function refresh(){
+    const t = sel.value;
+    rowPoints.classList.toggle('d-none', t !== 'points');
+    rowCustom.classList.toggle('d-none', t !== 'custom');
+    rowName.classList.toggle('d-none', t === 'points' || t === 'custom');
+
+    if (t === 'vps') {
+      labelName.innerText = 'VPS 说明';
+      inputName.placeholder = '例如：VPS月付 / 2C4G / 30天';
+    } else if (t === 'nat') {
+      labelName.innerText = 'NAT机说明';
+      inputName.placeholder = '例如：NAT机月付 / 30天';
+    } else if (t === 'discount_code') {
+      labelName.innerText = '优惠码说明';
+      inputName.placeholder = '例如：优惠码 XXXXX（你后续手动发放）';
+    } else {
+      labelName.innerText = '奖品说明';
+      inputName.placeholder = '例如：USDT 10 / 礼品卡 / 机场月付';
+    }
+  }
+  sel.addEventListener('change', refresh);
+  refresh();
+})();
+</script>
+{% endblock %}
