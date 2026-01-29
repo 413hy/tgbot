@@ -442,14 +442,43 @@ async def draw_raffle(Session, tz_name: str, code: str, bot=None, TGBotSession=N
         "验证方式：score = hexdec(SHA256(种子值 + 抽奖编号 + 参与编号) 前16位)，score 越小排名越靠前。"
     )
 
+    draw_message_id: int | None = None
     try:
-        await bot.send_message(
+        sent = await bot.send_message(
             chat_id=target_chat_id,
             text=msg,
             parse_mode="HTML",
             disable_web_page_preview=True,
         )
+        draw_message_id = sent.message_id
     except Exception as e:
         return True, f"开奖完成，但 TG 通知发送失败：{e}"
+
+    if draw_message_id:
+        draw_pinned_message_id: int | None = None
+        unpinned_publish = False
+        async with Session() as s:
+            raffle = await s.scalar(select(Raffle).where(Raffle.code == code))
+            if raffle:
+                publish_mid = raffle.pinned_message_id or raffle.published_message_id
+                if publish_mid:
+                    try:
+                        await bot.unpin_chat_message(chat_id=target_chat_id, message_id=int(publish_mid))
+                        unpinned_publish = True
+                    except Exception:
+                        unpinned_publish = False
+                try:
+                    await bot.pin_chat_message(chat_id=target_chat_id, message_id=draw_message_id, disable_notification=True)
+                    draw_pinned_message_id = draw_message_id
+                except Exception:
+                    draw_pinned_message_id = None
+
+                if unpinned_publish:
+                    raffle.pinned_message_id = None
+
+                if draw_pinned_message_id:
+                    raffle.draw_pinned_message_id = draw_pinned_message_id
+
+                await s.commit()
 
     return True, "开奖完成并已发送中奖通知" + (f"；{tgbot_warn}" if tgbot_warn else "")

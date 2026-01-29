@@ -1412,7 +1412,7 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         print("[DEBUG] 在 Conversation 中，跳过 handle_menu_text")
         return
 
-    if text in ("📅签到", "sign", "qiandao"):  # 宽松匹配
+    if text in ("📅签到", "签到", "sign", "qiandao"):  # 宽松匹配
         await sign(update, context)
     elif text in ("👤个人", "user"):
         await user(update, context)
@@ -1423,6 +1423,17 @@ async def handle_menu_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "请选择下面的菜单按钮哦～",
             reply_markup=MAIN_MENU_KEYBOARD
         )
+
+
+async def handle_group_sign_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.type not in ("group", "supergroup"):
+        return
+
+    text = (update.message.text or "").strip()
+    if text != "签到":
+        return
+
+    await sign(update, context)
 
 
 messages_to_delete = {}  # 如果不用了可以删掉
@@ -1569,6 +1580,10 @@ def main():
     app.add_handler(MessageHandler(
         filters.TEXT & ~filters.COMMAND & filters.ChatType.PRIVATE,
         handle_menu_text
+    ))
+    app.add_handler(MessageHandler(
+        filters.TEXT & ~filters.COMMAND & filters.ChatType.GROUPS,
+        handle_group_sign_text
     ))
 
     unbound_cmds = ['user', 'sign', 'exchange', 'logs', 'unbind']

@@ -63,6 +63,7 @@ CREATE TABLE IF NOT EXISTS raffles (
   status                VARCHAR(16) NOT NULL DEFAULT 'draft',
   published_message_id  BIGINT NULL,
   pinned_message_id     BIGINT NULL,
+  draw_pinned_message_id BIGINT NULL,
 
   draw_block_hash       CHAR(64) NULL,
   draw_block_height     BIGINT NULL,

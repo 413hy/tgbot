@@ -311,16 +311,17 @@ def _format_pn(pn: int | None) -> str:
 async def _post_draw_cleanup_loop(bot: Bot) -> None:
     """After-draw housekeeping.
 
-    - Delete per-user "参与成功" receipts **1 day after** the raffle is drawn
-    - Unpin the raffle message **3 days after** the raffle is drawn
+    - Delete per-user "参与成功" receipts **10 days after** the raffle is drawn
+    - Unpin the raffle message after draw (best-effort retries)
+    - Unpin the draw announcement **5 days after** the raffle is drawn
 
     NOTE: We store receipt message ids in DB so this survives restarts.
     """
     while True:
         try:
             now = now_local()
-            delete_before = now - timedelta(days=1)
-            unpin_before = now - timedelta(days=3)
+            delete_before = now - timedelta(days=10)
+            draw_unpin_before = now - timedelta(days=5)
 
             # 1) Delete receipts (batch)
             async with Session() as s:
@@ -354,7 +355,7 @@ async def _post_draw_cleanup_loop(bot: Bot) -> None:
                 if rows:
                     await s.commit()
 
-            # 2) Unpin old raffle messages
+            # 2) Unpin published raffle messages (best-effort retry)
             async with Session() as s:
                 raffles = (
                     await s.scalars(
@@ -362,7 +363,6 @@ async def _post_draw_cleanup_loop(bot: Bot) -> None:
                         .where(
                             Raffle.status == "drawn",
                             Raffle.drawn_at.is_not(None),
-                            Raffle.drawn_at <= unpin_before,
                             Raffle.pinned_message_id.is_not(None),
                             Raffle.target_chat_id.is_not(None),
                         )
@@ -380,7 +380,38 @@ async def _post_draw_cleanup_loop(bot: Bot) -> None:
                             await bot.unpin_chat_message(chat_id=cid)
                     except Exception:
                         pass
-                    r.pinned_message_id = None
+                    else:
+                        r.pinned_message_id = None
+                if raffles:
+                    await s.commit()
+
+            # 3) Unpin draw announcements after 5 days
+            async with Session() as s:
+                raffles = (
+                    await s.scalars(
+                        select(Raffle)
+                        .where(
+                            Raffle.status == "drawn",
+                            Raffle.drawn_at.is_not(None),
+                            Raffle.drawn_at <= draw_unpin_before,
+                            Raffle.draw_pinned_message_id.is_not(None),
+                            Raffle.target_chat_id.is_not(None),
+                        )
+                        .limit(20)
+                    )
+                ).all()
+                for r in raffles:
+                    cid = int(r.target_chat_id)
+                    mid = int(r.draw_pinned_message_id or 0)
+                    try:
+                        try:
+                            await bot.unpin_chat_message(chat_id=cid, message_id=mid)
+                        except Exception:
+                            await bot.unpin_chat_message(chat_id=cid)
+                    except Exception:
+                        pass
+                    else:
+                        r.draw_pinned_message_id = None
                 if raffles:
                     await s.commit()
 
