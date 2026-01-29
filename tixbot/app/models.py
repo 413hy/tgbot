@@ -81,6 +81,7 @@ class Raffle(Base):
     status: Mapped[str] = mapped_column(String(16), nullable=False, default="draft")
     published_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
     pinned_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    draw_pinned_message_id: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
 
     draw_block_hash: Mapped[str | None] = mapped_column(String(64), nullable=True)
     draw_block_height: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
