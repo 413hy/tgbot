@@ -39,6 +39,10 @@ router = Router()
 
 # 固定长度的随机参与编号（建议 8 位，冲突概率更低）
 PARTICIPANT_NO_LEN = 8
+# 同一用户同一抽奖的确认弹窗去重窗口（秒）
+JOIN_CONFIRM_TTL_SECONDS = 120
+# key: (raffle_code, tg_id) -> (chat_id, message_id, created_ts)
+_pending_join_confirms: dict[tuple[str, int], tuple[int, int, float]] = {}
 
 
 def _format_participant_no(pn: int) -> str:
@@ -681,6 +685,15 @@ async def join_request(cb: CallbackQuery):
                 )
             return await cb.answer("你的参与请求正在处理中，请在确认消息里操作。", show_alert=False)
 
+    # De-dup: avoid sending multiple confirmation messages on rapid repeated clicks.
+    cache_key = (code, user.id)
+    pending_info = _pending_join_confirms.get(cache_key)
+    if pending_info:
+        _, _, created_ts = pending_info
+        if (time.time() - float(created_ts)) <= JOIN_CONFIRM_TTL_SECONDS:
+            return await cb.answer("你已有待确认的参与弹窗，请在该弹窗中确认或取消。", show_alert=False)
+        _pending_join_confirms.pop(cache_key, None)
+
     ext = await _tgbot_get_user(user.id)
     if not ext:
         await _sync_local_user(user.id, user.username, user.first_name, user.last_name, None)
@@ -711,7 +724,7 @@ async def join_request(cb: CallbackQuery):
     text_html = "\n".join(lines)
 
     try:
-        await cb.bot.send_message(
+        confirm_msg = await cb.bot.send_message(
             chat_id=cb.message.chat.id,
             reply_to_message_id=cb.message.message_id,
             text=text_html,
@@ -723,6 +736,11 @@ async def join_request(cb: CallbackQuery):
         # Fallback: just answer
         return await cb.answer("请稍后再试", show_alert=False)
 
+    _pending_join_confirms[cache_key] = (
+        int(confirm_msg.chat.id),
+        int(confirm_msg.message_id),
+        time.time(),
+    )
     return await cb.answer("请在下方确认参加或取消", show_alert=False)
 
 
@@ -735,6 +753,7 @@ async def join_confirm(cb: CallbackQuery):
     user = cb.from_user
     if owner_tg_id is not None and user.id != owner_tg_id:
         return await cb.answer("这不是你的确认按钮。", show_alert=False)
+    _pending_join_confirms.pop((code, user.id), None)
 
     # Step 1: reserve a participant row in local DB (avoid double-deduction on rapid clicks)
     async with Session() as s:
@@ -858,6 +877,15 @@ async def join_confirm(cb: CallbackQuery):
             )
         await s.commit()
 
+        joined_count = await s.scalar(
+            select(func.count())
+            .select_from(RaffleParticipant)
+            .where(
+                RaffleParticipant.raffle_id == raffle.id,
+                RaffleParticipant.status == "joined",
+            )
+        )
+
     # Build confirmation text (in group), mention user, remove buttons.
     remaining = None
     if ext and ext.get("points") is not None:
@@ -865,6 +893,7 @@ async def join_confirm(cb: CallbackQuery):
 
     who = mention_html(user.id, user.username, user.first_name)
     msg_text = f"✅参与成功！{who}，你的编号：<code>{escape(_format_participant_no(part.participant_no))}</code>"
+    msg_text += f"\n当前参与人数：<b>{int(joined_count or 0)}</b>"
     if cost > 0 and remaining is not None:
         msg_text += f"\n消耗 <b>{cost}</b> 积分，当前总积分：<b>{remaining}</b>"
 
@@ -884,6 +913,7 @@ async def join_cancel(cb: CallbackQuery):
     owner_tg_id = int(parts[2]) if len(parts) > 2 and parts[2].isdigit() else None
     if owner_tg_id is not None and cb.from_user.id != owner_tg_id:
         return await cb.answer("这不是你的取消按钮。", show_alert=False)
+    _pending_join_confirms.pop((code, cb.from_user.id), None)
     try:
         await cb.message.edit_text("已取消参与。", reply_markup=None)
     except Exception:
