@@ -339,8 +339,9 @@ async def draw_raffle(Session, tz_name: str, code: str, bot=None, TGBotSession=N
             w.win_prize = prize_label(prize)
 
             ptype = getattr(prize, "prize_type", None) or "other"
-            # map custom -> other (tgbot.prize_wins enum has 'other')
-            tgbot_ptype = "other" if ptype == "custom" else ptype
+            # tgbot.prize_wins 通常仅区分 points / other。
+            # 为避免 enum 不兼容导致整批写入失败，除 points 外统一映射为 other。
+            tgbot_ptype = "points" if ptype == "points" else "other"
             pa = None
             if ptype == "points":
                 try:
