@@ -793,6 +793,7 @@ async def exchange_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 code = None
                 whmcs_promo_id = None
                 new_due_date_str = None
+                cancelled_invoice_count = 0
                 if selected['type'] == 'discount_code':
                     code = ''.join(random.choices(string.ascii_uppercase + string.digits, k=12))
                     expires_at = datetime.now() + timedelta(days=30)
@@ -871,6 +872,25 @@ async def exchange_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
                             )
                             if cursor_whmcs.rowcount != 1:
                                 raise RuntimeError(f"更新 nextduedate 失败，影响行数: {cursor_whmcs.rowcount}")
+
+                            cursor_whmcs.execute("""
+                                SELECT DISTINCT ii.invoiceid
+                                FROM tblinvoiceitems ii
+                                INNER JOIN tblinvoices i ON i.id = ii.invoiceid
+                                WHERE ii.type = 'Hosting'
+                                  AND ii.relid = %s
+                                  AND i.userid = %s
+                                  AND i.status = 'Unpaid'
+                            """, (selected_nat_id, client_id))
+                            invoice_ids = [row[0] for row in cursor_whmcs.fetchall()]
+
+                            if invoice_ids:
+                                placeholders = ','.join(['%s'] * len(invoice_ids))
+                                cursor_whmcs.execute(
+                                    f"UPDATE tblinvoices SET status = 'Cancelled' WHERE id IN ({placeholders})",
+                                    invoice_ids
+                                )
+                                cancelled_invoice_count = cursor_whmcs.rowcount
                             db_whmcs.commit()
                 details_json = json.dumps(details, ensure_ascii=False)
                 cursor_tg.execute("""
@@ -898,6 +918,10 @@ async def exchange_confirm(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply += f"\n已为服务 ID {selected_nat_id} 续期 {days} 天"
             if new_due_date_str:
                 reply += f"\n新到期日期：{new_due_date_str}"
+            if cancelled_invoice_count > 0:
+                reply += f"\n已自动取消相关未支付账单：{cancelled_invoice_count} 张"
+            else:
+                reply += "\n未发现需要取消的未支付账单"
         await update.message.reply_text(reply)
     except Exception as e:
         print(f"exchange_confirm error: {e}")
