@@ -40,13 +40,40 @@ router = Router()
 # 固定长度的随机参与编号（建议 8 位，冲突概率更低）
 PARTICIPANT_NO_LEN = 8
 # 同一用户同一抽奖的确认弹窗去重窗口（秒）
-JOIN_CONFIRM_TTL_SECONDS = 120
+JOIN_CONFIRM_TTL_SECONDS = 600
 # key: (raffle_code, tg_id) -> (chat_id, message_id, created_ts)
 _pending_join_confirms: dict[tuple[str, int], tuple[int, int, float]] = {}
 
 
 def _format_participant_no(pn: int) -> str:
     return f"{int(pn):0{PARTICIPANT_NO_LEN}d}"
+
+
+def _message_link(chat_id: int, message_id: int) -> str | None:
+    """Best-effort Telegram message link for supergroups/channels."""
+    if chat_id >= 0:
+        return None
+    sid = str(chat_id)
+    if not sid.startswith("-100"):
+        return None
+    return f"https://t.me/c/{sid[4:]}/{message_id}"
+
+
+async def _expire_join_confirm(bot: Bot, code: str, tg_id: int, chat_id: int, message_id: int, created_ts: float) -> None:
+    """Delete stale confirm message after timeout, then clear cache."""
+    await asyncio.sleep(JOIN_CONFIRM_TTL_SECONDS)
+    key = (code, tg_id)
+    current = _pending_join_confirms.get(key)
+    if not current:
+        return
+    cur_chat_id, cur_message_id, cur_ts = current
+    if int(cur_chat_id) != int(chat_id) or int(cur_message_id) != int(message_id) or float(cur_ts) != float(created_ts):
+        return
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except Exception:
+        pass
+    _pending_join_confirms.pop(key, None)
 
 
 def _gen_participant_no() -> int:
@@ -124,6 +151,8 @@ async def _auto_draw_loop(bot: Bot) -> None:
             for code in ordered[:20]:
                 try:
                     ok, msg = await draw_raffle(Session, settings.tz_name, code, bot=bot, TGBotSession=TGBotSession)
+                    if ok and msg and "写入 tgbot.prize_wins 失败" in msg:
+                        print(f"[tixbot][auto_draw] warning {code}: {msg}")
                     if not ok:
                         # Only log occasionally to avoid spam.
                         now_ts = int(time.time())
@@ -689,8 +718,14 @@ async def join_request(cb: CallbackQuery):
     cache_key = (code, user.id)
     pending_info = _pending_join_confirms.get(cache_key)
     if pending_info:
-        _, _, created_ts = pending_info
+        pending_chat_id, pending_message_id, created_ts = pending_info
         if (time.time() - float(created_ts)) <= JOIN_CONFIRM_TTL_SECONDS:
+            link = _message_link(int(pending_chat_id), int(pending_message_id))
+            if link:
+                return await cb.answer(
+                    f"你已有待确认弹窗，请处理该消息：{link}",
+                    show_alert=True,
+                )
             return await cb.answer("你已有待确认的参与弹窗，请在该弹窗中确认或取消。", show_alert=False)
         _pending_join_confirms.pop(cache_key, None)
 
@@ -736,10 +771,18 @@ async def join_request(cb: CallbackQuery):
         # Fallback: just answer
         return await cb.answer("请稍后再试", show_alert=False)
 
-    _pending_join_confirms[cache_key] = (
-        int(confirm_msg.chat.id),
-        int(confirm_msg.message_id),
-        time.time(),
+    created_ts = time.time()
+    cache_val = (int(confirm_msg.chat.id), int(confirm_msg.message_id), created_ts)
+    _pending_join_confirms[cache_key] = cache_val
+    asyncio.create_task(
+        _expire_join_confirm(
+            cb.bot,
+            code=code,
+            tg_id=user.id,
+            chat_id=cache_val[0],
+            message_id=cache_val[1],
+            created_ts=cache_val[2],
+        )
     )
     return await cb.answer("请在下方确认参加或取消", show_alert=False)
 
