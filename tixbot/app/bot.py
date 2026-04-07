@@ -151,6 +151,8 @@ async def _auto_draw_loop(bot: Bot) -> None:
             for code in ordered[:20]:
                 try:
                     ok, msg = await draw_raffle(Session, settings.tz_name, code, bot=bot, TGBotSession=TGBotSession)
+                    if ok and msg and "写入 tgbot.prize_wins 失败" in msg:
+                        print(f"[tixbot][auto_draw] warning {code}: {msg}")
                     if not ok:
                         # Only log occasionally to avoid spam.
                         now_ts = int(time.time())
